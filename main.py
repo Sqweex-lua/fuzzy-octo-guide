@@ -9,7 +9,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Настройки для yt-dlp (используем встроенный ffmpeg)
+# Настройки для yt-dlp
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -53,14 +53,14 @@ queues = {}
 
 @bot.event
 async def on_ready():
-    print(f'Бот {bot.user} готов к работе!')
+    print(f'✅ Бот {bot.user} готов к работе!')
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="!play"))
 
 @bot.command()
 async def play(ctx, *, query):
     """Воспроизводит музыку с YouTube"""
     if not ctx.author.voice:
-        await ctx.send("Вы должны быть в голосовом канале!")
+        await ctx.send("❌ Вы должны быть в голосовом канале!")
         return
     
     voice_channel = ctx.author.voice.channel
@@ -135,6 +135,7 @@ async def on_command_error(ctx, error):
 if __name__ == "__main__":
     token = os.getenv('BOT_TOKEN')
     if not token:
-        print("Ошибка: BOT_TOKEN не найден в переменных окружения")
+        print("❌ Ошибка: BOT_TOKEN не найден в переменных окружения")
     else:
+        print("✅ Запуск бота...")
         bot.run(token)
