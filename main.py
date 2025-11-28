@@ -4,16 +4,13 @@ import yt_dlp
 import asyncio
 import os
 
-# Настройки бота
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
-# Очереди для серверов
 queues = {}
 current = {}
 
-# Настройки yt-dlp
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -27,10 +24,7 @@ ytdl_format_options = {
     'default_search': 'auto',
 }
 
-ffmpeg_options = {
-    'options': '-vn'
-}
-
+ffmpeg_options = {'options': '-vn'}
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 class MusicSource(discord.PCMVolumeTransformer):
@@ -45,24 +39,21 @@ class MusicSource(discord.PCMVolumeTransformer):
         loop = loop or asyncio.get_event_loop()
         try:
             data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-            
             if 'entries' in data:
                 if data['entries']:
                     data = data['entries'][0]
                 else:
                     raise Exception("Не найдено треков")
-            
             filename = data['url'] if stream else ytdl.prepare_filename(data)
             return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
         except Exception as e:
             raise Exception(f"Ошибка загрузки: {str(e)}")
 
 def check_queue(ctx, guild_id):
-    if queues.get(guild_id):
-        if queues[guild_id]:
-            source = queues[guild_id].pop(0)
-            current[guild_id] = source
-            ctx.voice_client.play(source, after=lambda x=None: check_queue(ctx, guild_id))
+    if queues.get(guild_id) and queues[guild_id]:
+        source = queues[guild_id].pop(0)
+        current[guild_id] = source
+        ctx.voice_client.play(source, after=lambda x=None: check_queue(ctx, guild_id))
 
 @bot.event
 async def on_ready():
@@ -71,7 +62,6 @@ async def on_ready():
 
 @bot.command()
 async def play(ctx, *, query):
-    """Воспроизвести музыку"""
     try:
         if not ctx.author.voice:
             await ctx.send("❌ Сначала зайдите в голосовой канал!")
@@ -83,6 +73,9 @@ async def play(ctx, *, query):
             await voice_channel.connect()
         elif ctx.voice_client.channel != voice_channel:
             await ctx.voice_client.move_to(voice_channel)
+
+        # Даем время на подключение
+        await asyncio.sleep(1)
 
         async with ctx.typing():
             if "soundcloud.com" in query.lower() or "on.soundcloud.com" in query.lower():
