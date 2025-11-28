@@ -25,14 +25,14 @@ ytdl_format_options = {
 
 ffmpeg_options = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn'
+    'options': '-vn -filter:a "volume=0.5"'
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
-        super().__init__(source, volume)
+class YTDLSource(discord.FFmpegPCMAudio):
+    def __init__(self, source, data):
+        super().__init__(source, **ffmpeg_options)
         self.data = data
         self.title = data.get('title')
         self.url = data.get('url')
@@ -46,7 +46,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data = data['entries'][0]
         
         filename = data['url'] if stream else ytdl.prepare_filename(data)
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+        return cls(filename, data=data)
 
 # Очередь воспроизведения
 queues = {}
