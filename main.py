@@ -4,13 +4,12 @@ import yt_dlp
 import asyncio
 import os
 
+# Настройки бота
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix='/', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-queues = {}
-current = {}
-
+# Настройки для yt-dlp
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -22,12 +21,16 @@ ytdl_format_options = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
+    'source_address': '0.0.0.0'
 }
 
-ffmpeg_options = {'options': '-vn'}
+ffmpeg_options = {
+    'options': '-vn'
+}
+
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-class MusicSource(discord.PCMVolumeTransformer):
+class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
         self.data = data
@@ -35,110 +38,103 @@ class MusicSource(discord.PCMVolumeTransformer):
         self.url = data.get('url')
 
     @classmethod
-    async def from_url(cls, url, *, loop=None, stream=True):
+    async def from_url(cls, url, *, loop=None, stream=False):
         loop = loop or asyncio.get_event_loop()
-        try:
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-            if 'entries' in data:
-                if data['entries']:
-                    data = data['entries'][0]
-                else:
-                    raise Exception("Не найдено треков")
-            filename = data['url'] if stream else ytdl.prepare_filename(data)
-            return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
-        except Exception as e:
-            raise Exception(f"Ошибка загрузки: {str(e)}")
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+        
+        if 'entries' in data:
+            data = data['entries'][0]
+        
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
-def check_queue(ctx, guild_id):
-    if queues.get(guild_id) and queues[guild_id]:
-        source = queues[guild_id].pop(0)
-        current[guild_id] = source
-        ctx.voice_client.play(source, after=lambda x=None: check_queue(ctx, guild_id))
+# Очередь воспроизведения
+queues = {}
 
 @bot.event
 async def on_ready():
-    print(f'🎵 Бот {bot.user} готов к работе!')
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="/play"))
+    print(f'Бот {bot.user} готов к работе!')
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="!play"))
 
 @bot.command()
 async def play(ctx, *, query):
-    try:
-        if not ctx.author.voice:
-            await ctx.send("❌ Сначала зайдите в голосовой канал!")
-            return
-
-        voice_channel = ctx.author.voice.channel
-        
-        if ctx.voice_client is None:
-            await voice_channel.connect()
-        elif ctx.voice_client.channel != voice_channel:
-            await ctx.voice_client.move_to(voice_channel)
-
-        # Даем время на подключение
-        await asyncio.sleep(1)
-
-        async with ctx.typing():
-            if "soundcloud.com" in query.lower() or "on.soundcloud.com" in query.lower():
-                player = await MusicSource.from_url(query, stream=True)
-            else:
-                player = await MusicSource.from_url(f"ytsearch:{query}", stream=True)
+    """Воспроизводит музыку с YouTube"""
+    if not ctx.author.voice:
+        await ctx.send("Вы должны быть в голосовом канале!")
+        return
+    
+    voice_channel = ctx.author.voice.channel
+    
+    if ctx.voice_client is None:
+        await voice_channel.connect()
+    elif ctx.voice_client.channel != voice_channel:
+        await ctx.voice_client.move_to(voice_channel)
+    
+    async with ctx.typing():
+        try:
+            player = await YTDLSource.from_url(query, loop=bot.loop, stream=True)
             
-            guild_id = ctx.guild.id
+            # Добавляем в очередь
+            if ctx.guild.id not in queues:
+                queues[ctx.guild.id] = []
             
+            queues[ctx.guild.id].append(player)
+            
+            # Если ничего не играет, начинаем воспроизведение
             if not ctx.voice_client.is_playing():
-                current[guild_id] = player
-                ctx.voice_client.play(player, after=lambda x=None: check_queue(ctx, guild_id))
-                await ctx.send(f"🎵 Сейчас играет: **{player.title}**")
+                await play_next(ctx)
             else:
-                if guild_id not in queues:
-                    queues[guild_id] = []
-                queues[guild_id].append(player)
-                await ctx.send(f"✅ Добавлено в очередь: **{player.title}**")
+                await ctx.send(f'🎵 Добавлено в очередь: **{player.title}**')
                 
-    except Exception as e:
-        await ctx.send(f"❌ Ошибка: {str(e)}")
+        except Exception as e:
+            await ctx.send(f'❌ Произошла ошибка: {str(e)}')
 
 @bot.command()
 async def skip(ctx):
+    """Пропускает текущий трек"""
     if ctx.voice_client and ctx.voice_client.is_playing():
         ctx.voice_client.stop()
-        await ctx.send("⏭️ Трек пропущен")
+        await ctx.send('⏭️ Трек пропущен!')
+    else:
+        await ctx.send('❌ Сейчас ничего не играет!')
+
+async def play_next(ctx):
+    """Воспроизводит следующий трек из очереди"""
+    if ctx.guild.id in queues and queues[ctx.guild.id]:
+        player = queues[ctx.guild.id].pop(0)
+        ctx.voice_client.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
+        await ctx.send(f'🎵 Сейчас играет: **{player.title}**')
+    else:
+        await ctx.send('🎵 Очередь пуста!')
 
 @bot.command()
 async def stop(ctx):
+    """Останавливает музыку и очищает очередь"""
     if ctx.voice_client:
-        guild_id = ctx.guild.id
-        if guild_id in queues:
-            queues[guild_id].clear()
+        if ctx.guild.id in queues:
+            queues[ctx.guild.id].clear()
         ctx.voice_client.stop()
-        await ctx.send("⏹️ Музыка остановлена")
-
-@bot.command()
-async def pause(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
-        await ctx.send("⏸️ Пауза")
-
-@bot.command()
-async def resume(ctx):
-    if ctx.voice_client and ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
-        await ctx.send("▶️ Продолжаем")
+        await ctx.send('⏹️ Музыка остановлена!')
 
 @bot.command()
 async def leave(ctx):
+    """Покидает голосовой канал"""
     if ctx.voice_client:
+        if ctx.guild.id in queues:
+            queues[ctx.guild.id].clear()
         await ctx.voice_client.disconnect()
-        await ctx.send("👋 Покидаю канал")
+        await ctx.send('👋 Покидаю голосовой канал!')
 
-@bot.command()
-async def queue(ctx):
-    guild_id = ctx.guild.id
-    if guild_id in queues and queues[guild_id]:
-        queue_list = "\n".join([f"{i+1}. {track.title}" for i, track in enumerate(queues[guild_id][:10])])
-        await ctx.send(f"**Очередь:**\n{queue_list}")
-    else:
-        await ctx.send("📭 Очередь пуста")
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    print(f"Error: {error}")
 
 # Запуск бота
-bot.run(os.environ['BOT_TOKEN'])
+if __name__ == "__main__":
+    token = os.getenv('BOT_TOKEN')
+    if not token:
+        print("Ошибка: BOT_TOKEN не найден в переменных окружения")
+    else:
+        bot.run(token)
